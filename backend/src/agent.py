@@ -77,7 +77,7 @@ class MockLLMStream(llm.LLMStream):
 
     async def _run(self) -> None:
         last_msg = ""
-        for msg in reversed(self._chat_ctx.messages):
+        for msg in reversed(self._chat_ctx.messages()):
             if msg.role == "user":
                 last_msg = msg.content
                 break
