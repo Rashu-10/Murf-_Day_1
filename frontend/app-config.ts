@@ -40,7 +40,7 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
   supportsChatInput: true,
   supportsVideoInput: true,
   supportsScreenShare: true,
-  isPreConnectBufferEnabled: true,
+  isPreConnectBufferEnabled: false,
 
   logo: '/murf-logo.svg',
   accent: '#6366F1',
