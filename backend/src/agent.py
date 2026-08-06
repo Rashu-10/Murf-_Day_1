@@ -62,6 +62,75 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
+import asyncio
+from typing import Any
+from livekit.agents import llm, utils
+
+class MockLLMStream(llm.LLMStream):
+    def __init__(self, llm: llm.LLM, chat_ctx: llm.ChatContext, conn_options: Any):
+        super().__init__(
+            llm,
+            chat_ctx=chat_ctx,
+            tools=[],
+            conn_options=conn_options
+        )
+
+    async def _run(self) -> None:
+        last_msg = ""
+        for msg in reversed(self._chat_ctx.messages):
+            if msg.role == "user":
+                last_msg = msg.content
+                break
+        
+        user_text = last_msg.lower().strip() if isinstance(last_msg, str) else ""
+        if "hello" in user_text:
+            response = "Hello! I'm MediBuddy AI. How can I help you today?"
+        elif "what track" in user_text or "track" in user_text:
+            response = "I am built for the Health Access track. My goal is to help people get quick healthcare information."
+        elif "thank" in user_text or "thanks" in user_text:
+            response = "You're welcome. Have a healthy day!"
+        else:
+            response = "Hello! I'm MediBuddy AI. How can I help you today?"
+
+        request_id = utils.shortuuid()
+        words = response.split(" ")
+        for i, word in enumerate(words):
+            space = " " if i > 0 else ""
+            chunk = llm.ChatChunk(
+                id=request_id,
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content=space + word
+                )
+            )
+            self._event_ch.send_nowait(chunk)
+            await asyncio.sleep(0.05)
+
+class MockLLM(llm.LLM):
+    def __init__(self):
+        super().__init__()
+
+    @property
+    def model(self) -> str:
+        return "mock-gemini"
+
+    @property
+    def provider(self) -> str:
+        return "mock"
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: Any = None,
+        parallel_tool_calls: Any = None,
+        tool_choice: Any = None,
+        extra_kwargs: Any = None,
+    ) -> llm.LLMStream:
+        return MockLLMStream(self, chat_ctx, conn_options)
+
+
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
     # Logging setup
@@ -70,12 +139,10 @@ async def my_agent(ctx: JobContext):
         "room": ctx.room.name,
     }
 
-    # Set up a voice AI pipeline using Murf Falcon, Gemini, Deepgram, and the LiveKit turn detector
+    # Set up a voice AI pipeline using Murf Falcon, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
-        llm=google.LLM(
-            model="gemini-2.0-flash",
-        ),
+        llm=MockLLM(),
         tts=murf.TTS(
             voice="Anisha",
             style="Conversation",
