@@ -79,13 +79,11 @@ class MockLLMStream(llm.LLMStream):
         last_msg = ""
         for msg in reversed(self._chat_ctx.messages()):
             if msg.role == "user":
-                last_msg = msg.content
+                last_msg = msg.text_content or ""
                 break
         
-        user_text = last_msg.lower().strip() if isinstance(last_msg, str) else ""
-        if "hello" in user_text:
-            response = "Hello! I'm MediBuddy AI. How can I help you today?"
-        elif "what track" in user_text or "track" in user_text:
+        user_text = last_msg.lower().strip()
+        if "what track" in user_text or "track" in user_text:
             response = "I am built for the Health Access track. My goal is to help people get quick healthcare information."
         elif "thank" in user_text or "thanks" in user_text:
             response = "You're welcome. Have a healthy day!"
