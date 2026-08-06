@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import { TokenSource } from 'livekit-client';
+import { Room, TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
 import type { AppConfig } from '@/app-config';
@@ -33,16 +33,22 @@ export function App({ appConfig }: AppProps) {
       : TokenSource.endpoint('/api/token');
   }, [appConfig]);
 
-  const sessionOptions = useMemo(
-    () => ({
-      ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
-      roomOptions: {
+  const room = useMemo(
+    () =>
+      new Room({
         publishDefaults: {
           publishTimeout: 30000,
         },
-      },
+      }),
+    []
+  );
+
+  const sessionOptions = useMemo(
+    () => ({
+      room,
+      ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
     }),
-    [appConfig.agentName]
+    [room, appConfig.agentName]
   );
 
   const session = useSession(tokenSource, sessionOptions);
