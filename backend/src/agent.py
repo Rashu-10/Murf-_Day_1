@@ -56,11 +56,7 @@ server = AgentServer()
 
 
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load(
-        min_speech_duration=0.1,
-        min_silence_duration=0.3,
-        prefix_padding_duration=0.2,
-    )
+    proc.userdata["vad"] = silero.VAD.load()
 
 
 server.setup_fnc = prewarm
@@ -86,7 +82,6 @@ async def my_agent(ctx: JobContext):
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=1),
             text_pacing=False,
         ),
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
