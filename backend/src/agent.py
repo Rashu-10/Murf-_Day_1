@@ -113,16 +113,6 @@ async def my_agent(ctx: JobContext):
     await session.start(
         agent=Assistant(),
         room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=lambda params: (
-                    noise_cancellation.BVCTelephony()
-                    if params.participant.kind
-                    == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
-                    else noise_cancellation.BVC()
-                ),
-            ),
-        ),
     )
 
     # Join the room and connect to the user
