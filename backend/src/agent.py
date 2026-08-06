@@ -78,7 +78,7 @@ async def my_agent(ctx: JobContext):
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(
-            model="gemini-2.5-flash",
+            model="gemini-2.0-flash",
         ),
         tts=murf.TTS(
             voice="Anisha",
