@@ -33,10 +33,19 @@ export function App({ appConfig }: AppProps) {
       : TokenSource.endpoint('/api/token');
   }, [appConfig]);
 
-  const session = useSession(
-    tokenSource,
-    appConfig.agentName ? { agentName: appConfig.agentName } : undefined
+  const sessionOptions = useMemo(
+    () => ({
+      ...(appConfig.agentName ? { agentName: appConfig.agentName } : {}),
+      roomOptions: {
+        publishDefaults: {
+          publishTimeout: 30000,
+        },
+      },
+    }),
+    [appConfig.agentName]
   );
+
+  const session = useSession(tokenSource, sessionOptions);
 
   return (
     <AgentSessionProvider session={session}>
