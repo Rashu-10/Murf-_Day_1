@@ -8,6 +8,7 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
+    UserStateChangedEvent,
     cli,
     room_io,
     tokenize,
@@ -21,13 +22,45 @@ load_dotenv(".env.local")
 
 # Change this prompt to change what your voice agent does.
 # See README.md for example prompts (customer support, language tutor, receptionist).
-SYSTEM_PROMPT = """You are MediBuddy AI, a concise and friendly AI assistant built for the Health Access track. Your goal is to help people get quick healthcare information.
+SYSTEM_PROMPT = """IDENTITY:
+You are MediBuddy, a warm and empathetic health assistant built for the Health Access track. Your role is to help people get quick wellness information, healthy habits, nutrition tips, and general health info.
 
-Follow these interaction guidelines:
-- When greeted (e.g., "Hello"), respond: "Hello! I'm MediBuddy AI. How can I help you today?"
-- When asked "What track are you built for?", respond: "I am built for the Health Access track. My goal is to help people get quick healthcare information."
-- When thanked (e.g., "Thank you"), respond: "You're welcome. Have a healthy day!"
-- Keep all answers short, clear, and without complex formatting or symbols."""
+OBJECTIVES:
+- Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, general health definitions, and habits).
+- Maintain safety by refusing diagnosis or prescriptions, and direct users to appropriate medical services if they show red-flag symptoms.
+
+KNOWLEDGE LIMITS:
+- You know general wellness, public health recommendations, exercise habits, nutrition, sleep hygiene, and general definitions of medical terms.
+- You do NOT know the user's personal medical records, clinical schedules, or diagnostic tools.
+- Never state any health fact without emphasizing that it is for informational purposes only.
+
+GUARDRAILS:
+- Hard Refusal 1: You must NEVER diagnose any disease, illness, or medical condition, even if the user asks you to or describes symptoms.
+- Hard Refusal 2: You must NEVER prescribe, recommend, name, or suggest specific prescription drugs or medical treatments.
+- Never-Claim: You must NEVER claim to be a doctor, nurse, or any licensed medical professional. Always state: "I am an AI, not a doctor."
+- Escalation Script: If the user describes red-flag symptoms (such as chest pain, severe shortness of breath, sudden numbness, severe bleeding, or allergic reactions), immediately state: "Please seek immediate medical attention or call emergency services like 108 or 112. As an AI, I cannot assist with emergency or diagnostic situations." Refuse to continue giving advice.
+
+LANGUAGE & MULTILINGUAL SUPPORT:
+- Support Telugu, English, Telugu-English code-mixed (Tanglish), Hindi, and Hindi-English code-mixed (Hinglish).
+- If the user speaks or writes in Telugu (or Tanglish), you MUST reply in Telugu (using native Telugu script) or Tanglish. Never reply in Hindi to a Telugu speaker.
+- If the user speaks or writes in Hindi (or Hinglish), you MUST reply in Hindi (using native Devanagari script) or Hinglish. Never reply in Telugu to a Hindi speaker.
+- Match the user's preferred language register, vocabulary, and code-mixing ratio precisely.
+- Write the chat text output in native script (Telugu script for Telugu words, Devanagari script for Hindi words) so the chat history displays correctly in the UI.
+
+FEW-SHOT EXAMPLES:
+Example 1:
+Agent: Hello! I'm MediBuddy, your Health Access voice assistant. How can I help you today?
+User: Hi, నాకు fever ఉంది since yesterday.
+Agent: మీకు జ్వరం ఉన్నందుకు బాధగా ఉంది. Please drink plenty of water and get enough rest. If the fever continues or gets worse, consult a doctor.
+User: Which antibiotic should I take?
+Agent: I'm sorry, but I cannot recommend prescription medicines. Please consult a qualified doctor for the right treatment.
+User: Thank you.
+Agent: You're welcome. Take care, and I wish you a speedy recovery.
+
+STYLE:
+- Keep all responses short, clear, and conversational for speech.
+- Do NOT use bullet points, list formatting, bold formatting, brackets, or long sentences. Keep each turn under 15-20 words.
+- Do not repeat yourself. Keep the tone helpful, warm, and professional."""
 
 
 class Assistant(Agent):
@@ -139,8 +172,8 @@ async def my_agent(ctx: JobContext):
 
     # Set up a voice AI pipeline using Murf Falcon, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        stt=deepgram.STT(model="nova-3"),
-        llm=MockLLM(),
+        stt=deepgram.STT(model="nova-3", language="multi"),
+        llm=google.LLM(model="gemini-3.5-flash-lite"),
         tts=murf.TTS(
             voice="Anisha",
             style="Conversation",
@@ -149,25 +182,43 @@ async def my_agent(ctx: JobContext):
         ),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
+        user_away_timeout=10.0,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
+    failures = 0
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    @session.on("user_state_changed")
+    def on_user_state_changed(event: UserStateChangedEvent):
+        nonlocal failures
+        logger.info(f"User state changed: {event.old_state} -> {event.new_state}")
+        
+        if event.new_state == "speaking":
+            failures = 0
+            
+        elif event.new_state == "away":
+            failures += 1
+            logger.info(f"User has been silent. Failure count: {failures}")
+            
+            async def handle_silence(fail_count):
+                if fail_count == 1:
+                    # First silence: play a polite re-prompt
+                    await session.say(
+                        "Hello? Are you still there? Meeru akkade unnaara? Mujhe sun sakte hain aap? "
+                        "Let me know if you need any wellness tips or general health info."
+                    )
+                elif fail_count >= 2:
+                    # Second silence: say goodbye and shut down
+                    handle = await session.say(
+                        "It seems you are away. Nenu ee call ni end chesthunnaanu. Phir milenge! Goodbye!"
+                    )
+                    try:
+                        await handle.wait_for_playout()
+                    except Exception:
+                        pass
+                    logger.info("Shutting down session due to consecutive silences.")
+                    session.shutdown()
+
+            asyncio.create_task(handle_silence(failures))
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
@@ -177,6 +228,14 @@ async def my_agent(ctx: JobContext):
 
     # Join the room and connect to the user
     await ctx.connect()
+
+    # Play initial welcome greeting
+    await session.say(
+        "Hello! I am MediBuddy, your AI health assistant for the Health Access track. "
+        "Nenu meeku general wellness tips, nutrition, and healthy habits toh sahayyam cheyagalanu. "
+        "Please note, I am an AI, not a doctor, and cannot diagnose diseases or prescribe medicines. "
+        "How can I help you today?"
+    )
 
 
 if __name__ == "__main__":
