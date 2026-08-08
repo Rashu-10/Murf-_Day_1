@@ -44,13 +44,19 @@ export async function POST(req: Request) {
       );
     }
       
+    const language = body?.language || 'English';
+
     // Generate participant token
     const participantName = 'user';
     const participantIdentity = `voice_assistant_user_${Math.floor(Math.random() * 10_000)}`;
     const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
 
     const participantToken = await createParticipantToken(
-      { identity: participantIdentity, name: participantName },
+      { 
+        identity: participantIdentity, 
+        name: participantName,
+        metadata: JSON.stringify({ language })
+      },
       roomName,
       roomConfig
     );

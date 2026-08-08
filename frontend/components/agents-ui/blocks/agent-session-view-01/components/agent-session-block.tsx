@@ -101,6 +101,51 @@ export function Fade({ top = false, bottom = false, className }: FadeProps) {
   );
 }
 
+function SpeakerStatusPill({ agentState }: { agentState: string }) {
+  let text = "Listening to you";
+  let colorClass = "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20";
+  let pulseClass = "bg-teal-500";
+  let showPulse = true;
+  
+  if (agentState === 'speaking') {
+    text = "MediBuddy is speaking";
+    colorClass = "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20";
+    pulseClass = "bg-indigo-500";
+  } else if (agentState === 'thinking') {
+    text = "MediBuddy is thinking...";
+    colorClass = "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20";
+    pulseClass = "bg-amber-500";
+    showPulse = false;
+  }
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ duration: 0.3 }}
+      className={cn(
+        "absolute top-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2 border rounded-full text-xs font-semibold backdrop-blur-md shadow-sm transition-all duration-300",
+        colorClass
+      )}
+    >
+      {showPulse ? (
+        <span className="relative flex h-2 w-2">
+          <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", pulseClass)}></span>
+          <span className={cn("relative inline-flex rounded-full h-2 w-2", pulseClass)}></span>
+        </span>
+      ) : (
+        <span className="flex gap-0.5 items-center justify-center h-2 w-4">
+          <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
+          <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
+        </span>
+      )}
+      <span>{text}</span>
+    </motion.div>
+  );
+}
+
 export interface AgentSessionView_01Props {
   /**
    * Message shown above the controls before the first chat message is sent.
@@ -205,6 +250,10 @@ export function AgentSessionView_01({
       {...props}
     >
       <Fade top className="absolute inset-x-4 top-0 z-10 h-40" />
+      
+      {/* Floating speaker status pill */}
+      <SpeakerStatusPill agentState={agentState} />
+
       {/* transcript */}
 
       <div className="absolute top-0 bottom-[135px] flex w-full flex-col md:bottom-[170px]">

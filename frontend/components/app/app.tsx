@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Room, TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
@@ -27,19 +27,32 @@ interface AppProps {
 }
 
 export function App({ appConfig }: AppProps) {
+  const [selectedLanguage, setSelectedLanguage] = useState('English');
+
   const tokenSource = useMemo(() => {
-    return typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string'
-      ? getSandboxTokenSource(appConfig)
-      : TokenSource.endpoint('/api/token');
-  }, [appConfig]);
+    if (typeof process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT === 'string') {
+      return getSandboxTokenSource(appConfig);
+    }
+    return TokenSource.custom(async () => {
+      const response = await fetch('/api/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          language: selectedLanguage,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch connection token');
+      }
+      return response.json();
+    });
+  }, [appConfig, selectedLanguage]);
 
   const room = useMemo(
     () =>
-      new Room({
-        publishDefaults: {
-          publishTimeout: 30000,
-        },
-      }),
+      new Room({}),
     []
   );
 
@@ -57,7 +70,11 @@ export function App({ appConfig }: AppProps) {
     <AgentSessionProvider session={session}>
       <AppSetup />
       <main className="grid h-svh grid-cols-1 place-content-center">
-        <ViewController appConfig={appConfig} />
+        <ViewController 
+          appConfig={appConfig} 
+          selectedLanguage={selectedLanguage}
+          setSelectedLanguage={setSelectedLanguage}
+        />
       </main>
       <StartAudioButton label="Start Audio" />
       <Toaster

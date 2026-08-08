@@ -157,6 +157,28 @@ export function TileLayout({
                     )}
                     style={{ color: audioVisualizerColor }}
                   />
+
+                  {/* Central Avatar */}
+                  <motion.div
+                    animate={{
+                      scale: chatOpen ? 0.4 : 1,
+                    }}
+                    transition={{
+                      ...ANIMATION_TRANSITION,
+                      delay: animationDelay,
+                    }}
+                    className={cn(
+                      'absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2',
+                      'z-20 rounded-full overflow-hidden border-2 border-teal-500 bg-background shadow-lg shadow-teal-500/10',
+                      'size-32 pointer-events-none'
+                    )}
+                  >
+                    <img
+                      src="/medibuddy_avatar.png"
+                      alt="MediBuddy Avatar"
+                      className="size-full object-cover"
+                    />
+                  </motion.div>
                 </motion.div>
               )}
 
