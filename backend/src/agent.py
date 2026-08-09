@@ -1,20 +1,23 @@
+import json
 import logging
 
 from dotenv import load_dotenv
-from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
+    RunContext,
     UserStateChangedEvent,
     cli,
-    room_io,
+    function_tool,
     tokenize,
 )
-from livekit.plugins import deepgram, google, murf, noise_cancellation, silero
+from livekit.plugins import deepgram, google, murf, silero
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+import database
 
 logger = logging.getLogger("agent")
 
@@ -64,25 +67,38 @@ STYLE:
 
 
 class Assistant(Agent):
-    def __init__(self) -> None:
-        super().__init__(instructions=SYSTEM_PROMPT)
+    def __init__(self, instructions: str = SYSTEM_PROMPT) -> None:
+        super().__init__(instructions=instructions)
 
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+    @function_tool
+    async def lookup_caller(self, context: RunContext, user_id: str) -> str:
+        """Use this tool to look up details about a caller in the database.
+        
+        Args:
+            user_id: The unique ID of the caller.
+        """
+        logger.info(f"LLM called lookup_caller for user_id={user_id}")
+        profile = database.get_caller(user_id)
+        if profile:
+            return json.dumps(profile)
+        return "No profile found for this caller."
+
+    @function_tool
+    async def save_caller_info(self, context: RunContext, user_id: str, name: str, language_preference: str, facts: dict) -> str:
+        """Use this tool to save or update details about a caller in the database.
+        ONLY call this tool if the user has explicitly consented to saving their information during this conversation.
+        
+        Args:
+            user_id: The unique ID of the caller.
+            name: The caller's name.
+            language_preference: The caller's preferred language (e.g. English, Telugu, Hindi).
+            facts: A dictionary containing details about the caller. Must include 'age_band', 'ongoing_conditions', and 'last_triage_outcome'.
+        """
+        logger.info(f"LLM called save_caller_info for user_id={user_id}, name={name}")
+        success = database.save_caller(user_id, name, language_preference, facts)
+        if success:
+            return "Caller profile saved successfully."
+        return "Failed to save caller profile."
 
 
 server = AgentServer()
@@ -90,6 +106,7 @@ server = AgentServer()
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
+    database.init_db()
 
 
 server.setup_fnc = prewarm
@@ -97,7 +114,9 @@ server.setup_fnc = prewarm
 
 import asyncio
 from typing import Any
+
 from livekit.agents import llm, utils
+
 
 class MockLLMStream(llm.LLMStream):
     def __init__(self, llm: llm.LLM, chat_ctx: llm.ChatContext, conn_options: Any):
@@ -114,7 +133,7 @@ class MockLLMStream(llm.LLMStream):
             if msg.role == "user":
                 last_msg = msg.text_content or ""
                 break
-        
+
         user_text = last_msg.lower().strip()
         if "what track" in user_text or "track" in user_text:
             response = "I am built for the Health Access track. My goal is to help people get quick healthcare information."
@@ -170,6 +189,12 @@ The user has selected the language: {language}.
 You MUST conduct the entire conversation and reply ONLY in {language}.
 Do NOT use other languages. Write the text outputs in the native script of {language} (e.g. Devanagari script for Hindi, Telugu script for Telugu, Bengali script for Bengali, etc. - except for English where you write in English).
 
+LANGUAGE & SCRIPT:
+Always write every language in its own native script.
+- Hindi → Devanagari (नमस्ते), never romanized (never "namaste").
+- Telugu → Telugu script (నమసాకారం/నమస్తే), never romanized (never "namaskaram" or "namaste").
+- Same rule for all non-English languages.
+
 OBJECTIVES:
 - Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, general health definitions, and habits).
 - Maintain safety by refusing diagnosis or prescriptions, and direct users to appropriate medical services if they show red-flag symptoms.
@@ -183,6 +208,23 @@ GUARDRAILS:
 - Hard Refusal 2: You must NEVER prescribe, recommend, name, or suggest specific prescription drugs or medical treatments.
 - Never-Claim: You must NEVER claim to be a doctor, nurse, or any licensed medical professional. Always state: "I am an AI, not a doctor."
 - Escalation Script: If the user describes red-flag symptoms (such as chest pain, severe shortness of breath, sudden numbness, severe bleeding, or allergic reactions), immediately state (in {language}): "Please seek immediate medical attention or call emergency services like 108 or 112. As an AI, I cannot assist with emergency or diagnostic situations." Refuse to continue giving advice.
+- Unrelated/Harmful Request Refusal: If the user asks for help with inappropriate, harmful, or unrelated activities (like hacking, programming advice, or non-health topics), you must explicitly and politely refuse to assist with that request, stating that you cannot help with it, and remind them that you can only help with wellness and health-related topics.
+
+CALLER ID & RECORD RETRIEVAL:
+- The current caller's ID is: {user_id}
+- During your initial greeting (before the user has spoken), do NOT call any tools. Just introduce yourself as MediBuddy and ask how you can help.
+- As soon as the user speaks their first message, you MUST call the `lookup_caller` tool with this ID to check if they have a saved profile.
+- If the tool returns a profile, you MUST welcome them back warmly by name, reference their last interaction and facts (like ongoing conditions), and ask how they are doing (e.g., "Namaste Ramesh, last time we spoke about your diabetes and recommended rest. Did the rest help?").
+- If the tool returns "No profile found", greet them warmly, state that you are built for the Health Access track, and explain how you can help. During the call, ask for their name and other health details.
+
+CONSENT & RECORD SAVING:
+- You MUST ask the caller for explicit consent before saving or updating any of their information (e.g., "Would you like me to remember your name, age, and conditions for your next visit?").
+- ONLY if the user says YES, call the `save_caller_info` tool to save their details (name, language, and facts: age_band, ongoing_conditions, and last_triage_outcome).
+- If the user says NO, do NOT call `save_caller_info`, and explicitly confirm to the user that you will not save their data.
+- NEVER save any detailed or written-out medical notes. You are only allowed to save:
+  * name
+  * language preference
+  * facts: age_band (e.g. child, adult, senior), ongoing_conditions, and last_triage_outcome.
 
 STYLE:
 - Keep all responses short, clear, and conversational for speech.
@@ -200,9 +242,11 @@ async def my_agent(ctx: JobContext):
     # Join the room first to check participant metadata
     await ctx.connect()
 
-    # Determine user's selected language
+    # Determine user's selected language and identity
     selected_language = "English"
+    participant_identity = "default_user"
     for p in ctx.room.remote_participants.values():
+        participant_identity = p.identity
         if p.metadata:
             try:
                 import json
@@ -213,7 +257,7 @@ async def my_agent(ctx: JobContext):
             except Exception:
                 pass
 
-    logger.info(f"User connected with selected language: {selected_language}")
+    logger.info(f"User connected with selected language: {selected_language}, identity: {participant_identity}")
 
     # Map selected language to corresponding native Murf TTS voices
     voice_map = {
@@ -227,22 +271,7 @@ async def my_agent(ctx: JobContext):
         "Malayalam": "Ananya",
         "Marathi": "Priya",
         "Punjabi": "Jaspreet",
-        "Urdu": "Zoya",
-    }
-    voice = voice_map.get(selected_language, "Anisha")
-
-    greetings = {
-        "English": "Hello! I am MediBuddy, your AI health assistant. I can help you with wellness tips, nutrition, and healthy habits. Please note, I am an AI, not a doctor. How can I help you today?",
-        "Telugu": "నమస్తే! నేను మెడిబడ్డీ, మీ AI ఆరోగ్య సహాయకుడిని. నేను మీకు సాధారణ ఆరోగ్యం, పోషణ మరియు మంచి అలవాట్లపై చిట్కాలు ఇవ్వగలను. నేను AI మాత్రమే, డాక్టర్ని కాదు. ఈరోజు నేను మీకు ఎలా సహాయపడగలను?",
-        "Hindi": "नमस्ते! मैं मेडिबडी हूँ, आपका एआई स्वास्थ्य सहायक। मैं आपको सामान्य स्वास्थ्य, पोषण और स्वस्थ आदतों के बारे में सुझाव दे सकता हूँ। कृपया ध्यान दें, मैं एक एआई हूँ, डॉक्टर नहीं। आज मैं आपकी क्या मदद कर सकता हूँ?",
-        "Bengali": "নমস্কার! আমি মেডিবাডি, আপনার এআই স্বাস্থ্য সহকারী। আমি আপনাকে সাধারণ সুস্থতা, পুষ্টি এবং স্বাস্থ্যকর অভ্যাস সম্পর্কে পরামর্শ দিতে পারি। মনে রাখবেন, আমি এআই, ডাক্তার নই। আজ আমি আপনাকে কীভাবে সাহায্য করতে পারি?",
-        "Gujarati": "નમસ્તે! હું મેડીબડી છું, તમારા એઆઈ આરોગ્ય સહાયક. હું તમને સામાન્ય સુખાકારી, પોષણ અને તંદુરસ્ત આદતો વિશે માહિતી આપી શકું છું. મહેરબાની કરીને નોંધ લો કે હું એઆઈ છું, ડોક્ટર નથી. આજે હું તમારી શું મદદ કરી શકું?",
-        "Kannada": "ನಮಸ್ತೆ! ನಾನು ಮೆಡಿಬಡ್ಡಿ, ನಿಮ್ಮ ಎಐ ಆರೋಗ್ಯ ಸಹಾಯಕ. ನಾನು ನಿಮಗೆ ಸಾಮಾನ್ಯ ಸ್ವಾಸ್ಥ್ಯ, ಪೋಷಣೆ ಮತ್ತು ಆರೋಗ್ಯಕರ ಅಭ್ಯಾಸಗಳ ಬಗ್ಗೆ ಸಲಹೆ ನೀಡಬಲ್ಲೆ. ದಯವಿಟ್ಟು ಗಮನಿಸಿ, ನಾನು ಎಐ, ವೈದ್ಯನಲ್ಲ. ಇವತ್ತು ನಾನು ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
-        "Malayalam": "നമസ്കാരം! ഞാൻ മെഡിബഡി, നിങ്ങളുടെ എഐ ആരോഗ്യ സഹായിയാണ്. പൊതുവായ ആരോഗ്യം, പോഷകാഹാരം, നല്ല ശീലങ്ങൾ എന്നിവയെക്കുറിച്ച് ഞാൻ ടിപ്പുകൾ നൽകാം. ഞാൻ ഒരു എഐ മാത്രമാണ്, ഡോക്ടറല്ല. ഇന്ന് ഞാൻ നിങ്ങളെ എങ്ങനെ സഹായിക്കണം?",
-        "Marathi": "नमस्कार! मी मेडिबडी आहे, तुमचा एआय आरोग्य सहाय्यक. मी तुम्हाला सामान्य आरोग्य, पोषण आणि निरोगी सवयींबद्दल सल्ला देऊ शकतो. कृपया लक्षात ठेवा, मी एक एआई आहे, डॉक्टर नाही. आज मी तुमची काय मदत करू शकतो?",
-        "Punjabi": "ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਮੇਡੀਬਡੀ ਹਾਂ, ਤੁਹਾਡਾ ਏਆਈ ਸਿਹਤ ਸਹਾਇਕ। ਮੈਂ ਤੁਹਾਨੂੰ ਤੰਦਰੁਸਤੀ, ਪੋਸ਼ਣ ਅਤੇ ਸਿਹਤਮੰਦ ਆਦਤਾਂ ਬਾਰੇ ਜਾਣਕਾਰੀ ਦੇ ਸਕਦਾ ਹਾਂ। ਕਿਰਪਾ ਕਰਕੇ ਧਿਆਨ ਦਿਓ, ਮੈਂ ਏਆਈ ਹਾਂ, ਡਾਕਟਰ ਨਹੀਂ। ਅੱਜ ਮੈਂ ਤੁਹਾਡੀ ਕੀ ਮਦਦ ਕਰ ਸਕਦਾ ਹਾਂ?",
-        "Tamil": "வணக்கம்! நான் மெடிபடி, உங்கள் ஏஐ சுகாதார உதவியாளர். ஆரோக்கியம், ஊட்டச்சத்து மற்றும் நல்ல பழக்கவழக்கங்கள் பற்றிய குறிப்புகளை நான் உங்களுக்கு வழங்க முடியும். நான் ஏஐ தான், மருத்துவர் அல்ல. இன்று நான் உங்களுக்கு எப்படி உதவ முடியும்?",
-        "Urdu": "السلام علیکم! میں میڈی بڈی ہوں، آپ کا اے آئی صحت کا معاون۔ میں تندرستی، غذائیت اور صحت مند عادات کے بارے میں معلومات دے سکتا ہوں۔ براہ کرم یاد رکھیں، میں اے آئی ہوں، ڈاکٹر نہیں۔ آج میں آپ کی کیا مدد کر سکتا ہوں؟"
+        "Urdu": "Zoya"
     }
 
     reprompts = {
@@ -272,8 +301,12 @@ async def my_agent(ctx: JobContext):
         "Tamil": "நீங்கள் தூரமாக இருப்பது போல் தெரிகிறது. நான் இந்த அழைப்பை முடிக்கிறேன். விடைபெறுகிறேன்!",
         "Urdu": "ایسا لگتا ہے کہ آپ دور ہیں۔ میں یہ کال ختم کر رہا ہوں۔ خدا حافظ!"
     }
+    voice = voice_map.get(selected_language, "Anisha")
 
-    custom_prompt = SYSTEM_PROMPT_TEMPLATE.format(language=selected_language)
+    custom_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        language=selected_language,
+        user_id=participant_identity
+    )
 
     # Set up the voice AI pipeline dynamically
     session = AgentSession(
@@ -282,9 +315,10 @@ async def my_agent(ctx: JobContext):
         tts=murf.TTS(
             voice=voice,
             style="Conversation" if voice == "Anisha" else None,
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=1),
-            text_pacing=False,
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True,
         ),
+        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
         user_away_timeout=10.0,
@@ -296,39 +330,41 @@ async def my_agent(ctx: JobContext):
     def on_user_state_changed(event: UserStateChangedEvent):
         nonlocal failures
         logger.info(f"User state changed: {event.old_state} -> {event.new_state}")
-        
+
         if event.new_state == "speaking":
             failures = 0
-            
+
         elif event.new_state == "away":
             failures += 1
             logger.info(f"User has been silent. Failure count: {failures}")
-            
+
             async def handle_silence(fail_count):
+                import contextlib
                 if fail_count == 1:
                     msg = reprompts.get(selected_language, reprompts["English"])
                     await session.say(msg)
                 elif fail_count >= 2:
                     msg = goodbyes.get(selected_language, goodbyes["English"])
                     handle = await session.say(msg)
-                    try:
+                    with contextlib.suppress(Exception):
                         await handle.wait_for_playout()
-                    except Exception:
-                        pass
                     logger.info("Shutting down session due to consecutive silences.")
                     session.shutdown()
 
-            asyncio.create_task(handle_silence(failures))
+            task = asyncio.create_task(handle_silence(failures))
+            if "tasks" not in session.userdata:
+                session.userdata["tasks"] = set()
+            session.userdata["tasks"].add(task)
+            task.add_done_callback(session.userdata["tasks"].discard)
 
     # Start the session with customized LLM instructions
     await session.start(
-        agent=Agent(instructions=custom_prompt),
+        agent=Assistant(instructions=custom_prompt),
         room=ctx.room,
     )
 
-    # Play initial welcome greeting in selected language
-    welcome_msg = greetings.get(selected_language, greetings["English"])
-    await session.say(welcome_msg)
+    # Let the LLM generate the initial greeting instead of playing a static greeting
+    await session.generate_reply()
 
 
 if __name__ == "__main__":

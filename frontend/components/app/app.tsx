@@ -34,6 +34,11 @@ export function App({ appConfig }: AppProps) {
       return getSandboxTokenSource(appConfig);
     }
     return TokenSource.custom(async () => {
+      let userId = localStorage.getItem('medibuddy_user_id');
+      if (!userId) {
+        userId = `user_${Math.floor(100000 + Math.random() * 900000)}`;
+        localStorage.setItem('medibuddy_user_id', userId);
+      }
       const response = await fetch('/api/token', {
         method: 'POST',
         headers: {
@@ -41,6 +46,7 @@ export function App({ appConfig }: AppProps) {
         },
         body: JSON.stringify({
           language: selectedLanguage,
+          userId: userId,
         }),
       });
       if (!response.ok) {

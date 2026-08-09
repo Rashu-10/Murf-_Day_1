@@ -79,7 +79,7 @@ export function ViewController({
     }
   };
 
-  const isConnecting = connectionState === ConnectionState.Connecting || connectionState === 'connecting';
+  const isConnecting = (connectionState as string) === 'connecting' || (connectionState as string) === ConnectionState.Connecting;
 
   return (
     <AnimatePresence mode="wait">

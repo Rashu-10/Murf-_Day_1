@@ -576,10 +576,10 @@ export function MediBuddyDashboard({
     }
   };
 
-  // Helper to translate key string based on selected language
-  const t = (key: string) => {
-    const dict = TRANSLATIONS[selectedLanguage] || TRANSLATIONS['English'];
-    return dict[key] || TRANSLATIONS['English'][key] || key;
+  // Helper to translate key string based on selected language (Locked to English as requested)
+  const t = (key: string): string => {
+    const dict = TRANSLATIONS['English'];
+    return dict[key] || key;
   };
 
   // Handle Quick Action click
@@ -884,7 +884,7 @@ export function MediBuddyDashboard({
         </section>
 
         {/* Right Side: Conversation Transcript & Guides */}
-        <section className="lg:col-span-1 flex flex-col gap-6 w-full">
+        <section className="lg:col-span-1 flex flex-col gap-6 w-full lg:sticky lg:top-6 lg:self-start">
           
           {/* Transcript Card */}
           <div className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm flex flex-col h-[350px]">

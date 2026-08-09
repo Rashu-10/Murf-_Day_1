@@ -1,5 +1,5 @@
 import pytest
-from livekit.agents import AgentSession, inference, llm
+from livekit.agents import AgentSession, llm
 from livekit.plugins import google
 
 from agent import Assistant
@@ -109,3 +109,61 @@ async def test_refuses_harmful_request() -> None:
 
         # Ensures there are no function calls or other unexpected events
         result.expect.no_more_events()
+
+
+@pytest.mark.asyncio
+async def test_database_flow() -> None:
+    """Evaluation of caller lookup, saving with consent, and returning caller greeting."""
+    import sqlite3
+
+    import agent
+    import database
+
+    # Clean the test user from the database
+    database.init_db()
+    user_id = "test_user_777"
+    conn = sqlite3.connect(database.DB_PATH)
+    conn.execute("DELETE FROM callers WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    # Scenario 1: New user call - Gathers facts, asks for consent, and saves profile
+    prompt_new = agent.SYSTEM_PROMPT_TEMPLATE.format(language="English", user_id=user_id)
+    async with (
+        _llm() as llm,
+        AgentSession(llm=llm) as session,
+    ):
+        await session.start(Assistant(instructions=prompt_new))
+
+        # User provides details and consents to save
+        result = await session.run(
+            user_input="My name is Ramesh. I am 40 years old, and I have hypertension. Yes, please save my profile."
+        )
+
+        # Assert function call to save_caller_info
+        result.expect.contains_function_call(name="save_caller_info")
+
+    # Verify data exists in SQLite database
+    profile = database.get_caller(user_id)
+    assert profile is not None
+    assert profile["name"] == "Ramesh"
+    assert profile["facts"].get("ongoing_conditions") == "hypertension"
+
+    # Scenario 2: Returning user call - Welcome back greeting
+    async with (
+        _llm() as llm,
+        AgentSession(llm=llm) as session,
+    ):
+        await session.start(Assistant(instructions=prompt_new))
+
+        # When user starts the conversation, the agent should call lookup_caller first to see who they are
+        result = await session.run(user_input="Hello, I am back.")
+
+        # Check if lookup_caller tool was called
+        result.expect.contains_function_call(name="lookup_caller")
+
+        # Check if the assistant greeted the user by name and reference their facts
+        await (
+            result.expect.contains_message(role="assistant")
+            .judge(llm, intent="Greets Ramesh by name and references their previous topic or hypertension.")
+        )
