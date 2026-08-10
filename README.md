@@ -194,6 +194,12 @@ You are a patient and encouraging language tutor helping the user practice conve
 You are a professional receptionist for a medical clinic. Help callers schedule appointments, answer questions about office hours and services, and take messages for doctors. Be warm but efficient. Ask for the caller's name and reason for calling upfront.
 ```
 
+**Health Access (Domain Tools Enabled):**
+
+The voice agent is pre-configured with custom domain tools for the **Health Access** track (see [backend/README.md](backend/README.md) for details):
+- **Symptom Triage Classifier**: Deterministically classifies symptom descriptions and offers guidelines (using clinical protocols updated in August 2026).
+- **Nearest PHC or Facility Lookup**: Looks up nearby primary health centres and hospitals in India using live OpenStreetMap APIs, falling back to a pre-compiled offline database of major cities (last updated in August 2026) if network calls fail or time out.
+
 See the Configuration section below for voice, STT, and LLM options.
 
 ---

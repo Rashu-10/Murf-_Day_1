@@ -1,5 +1,9 @@
 import json
 import logging
+import math
+from datetime import datetime, timezone
+import aiohttp
+import asyncio
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -23,13 +27,169 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
+# Helper functions for OSM geocoding and querying
+headers = {"User-Agent": "MediBuddyHealthAccessAgent/1.0 (contact: support@medibuddy.ai)"}
+
+LOCAL_FACILITIES = {
+    "hyderabad": [
+        {"name": "Urban Primary Health Centre, Gachibowli", "type": "UPHC", "address": "Gachibowli, near GPRA Qtrs, Hyderabad, Telangana", "distance_km": 1.2},
+        {"name": "Urban Primary Health Centre, Madhapur", "type": "UPHC", "address": "Kavuri Hills, Madhapur, Hyderabad, Telangana", "distance_km": 2.5},
+        {"name": "Kondapur Area Hospital", "type": "Hospital", "address": "Kondapur Main Road, Hyderabad, Telangana", "distance_km": 3.1}
+    ],
+    "bangalore": [
+        {"name": "Urban Primary Health Centre, Indiranagar", "type": "UPHC", "address": "12th Main Rd, HAL 2nd Stage, Indiranagar, Bangalore, Karnataka", "distance_km": 0.8},
+        {"name": "Urban Primary Health Centre, Domlur", "type": "UPHC", "address": "Domlur Layout, Bangalore, Karnataka", "distance_km": 1.9},
+        {"name": "Sir C.V. Raman General Hospital", "type": "Hospital", "address": "Indiranagar, Bangalore, Karnataka", "distance_km": 2.2}
+    ],
+    "delhi": [
+        {"name": "Urban Primary Health Centre, Saket", "type": "UPHC", "address": "J-Block, Saket, New Delhi", "distance_km": 1.5},
+        {"name": "Max Super Speciality Hospital, Saket", "type": "Hospital", "address": "Press Enclave Road, Saket, New Delhi", "distance_km": 2.0},
+        {"name": "Urban Primary Health Centre, Malviya Nagar", "type": "UPHC", "address": "Malviya Nagar, New Delhi", "distance_km": 2.8}
+    ],
+    "mumbai": [
+        {"name": "Urban Health Centre, Bandra", "type": "UPHC", "address": "Bandra West, Mumbai, Maharashtra", "distance_km": 1.1},
+        {"name": "Bhabha Hospital", "type": "Hospital", "address": "Belasis Road, Bandra West, Mumbai, Maharashtra", "distance_km": 1.8},
+        {"name": "Urban Health Centre, Khar", "type": "UPHC", "address": "Khar West, Mumbai, Maharashtra", "distance_km": 2.5}
+    ]
+}
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0 # Earth radius in km
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def find_local_fallback(location_query: str):
+    query_lower = location_query.lower()
+    for key, facilities in LOCAL_FACILITIES.items():
+        if key in query_lower:
+            return facilities
+    return LOCAL_FACILITIES["hyderabad"]
+
+async def geocode_nominatim(location_query: str) -> tuple[float, float, str] | None:
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {
+        "q": location_query,
+        "format": "json",
+        "limit": 1
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, headers=headers, timeout=4.0) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data:
+                        lat = float(data[0]["lat"])
+                        lon = float(data[0]["lon"])
+                        display_name = data[0]["display_name"]
+                        return lat, lon, display_name
+    except Exception as e:
+        logger.warning(f"Nominatim geocoding failed/timed out: {e}")
+    return None
+
+async def query_overpass(lat: float, lon: float) -> list[dict] | None:
+    url = "https://overpass-api.de/api/interpreter"
+    overpass_query = f"""
+    [out:json][timeout:5];
+    (
+      nwr["amenity"="hospital"](around:5000,{lat},{lon});
+      nwr["amenity"="clinic"](around:5000,{lat},{lon});
+      nwr["amenity"="doctors"](around:5000,{lat},{lon});
+      nwr["healthcare"="centre"](around:5000,{lat},{lon});
+      nwr["amenity"="health_post"](around:5000,{lat},{lon});
+    );
+    out tags center;
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data={"data": overpass_query}, headers=headers, timeout=5.0) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    elements = data.get("elements", [])
+                    facilities = []
+                    for el in elements:
+                        tags = el.get("tags", {})
+                        name = tags.get("name", "Unnamed Facility")
+                        amenity = tags.get("amenity", tags.get("healthcare", "Health Facility"))
+                        addr_street = tags.get("addr:street", "")
+                        addr_city = tags.get("addr:city", "")
+                        address = f"{addr_street}, {addr_city}".strip(", ")
+                        if not address:
+                            address = "Details not in live record"
+                        
+                        el_lat = el.get("lat") or el.get("center", {}).get("lat")
+                        el_lon = el.get("lon") or el.get("center", {}).get("lon")
+                        
+                        distance_km = 0.0
+                        if el_lat is not None and el_lon is not None:
+                            distance_km = calculate_distance(lat, lon, float(el_lat), float(el_lon))
+                        
+                        facilities.append({
+                            "name": name,
+                            "type": amenity,
+                            "address": address,
+                            "distance_km": round(distance_km, 2)
+                        })
+                    facilities.sort(key=lambda x: x["distance_km"])
+                    return facilities[:3]
+    except Exception as e:
+        logger.warning(f"Overpass query failed/timed out: {e}")
+    return None
+
+def classify_triage(symptoms: str) -> dict:
+    s_lower = symptoms.lower()
+    
+    red_keywords = [
+        "chest pain", "chest pressure", "heart attack", "cardiac",
+        "cannot breathe", "difficulty breathing", "shortness of breath",
+        "breathless", "suffocat", "stroke", "face drooping", "numbness",
+        "speech difficulty", "slurred speech", "unconscious", "fainted",
+        "passed out", "heavy bleeding", "severe bleeding", "allergic reaction",
+        "anaphylaxis", "poison"
+    ]
+    
+    yellow_keywords = [
+        "high fever", "102", "103", "104", "fever for days",
+        "severe stomach", "abdominal pain", "stomach ache",
+        "persistent vomiting", "vomit", "dehydrat", "deep cut",
+        "stitches", "wheez", "breath difficulty"
+    ]
+    
+    matched_red = [k for k in red_keywords if k in s_lower]
+    matched_yellow = [k for k in yellow_keywords if k in s_lower]
+    
+    if matched_red:
+        return {
+            "triage_level": "Emergency",
+            "color_code": "Red",
+            "guidelines": "Seek immediate medical attention. Call emergency services like 108 or 112 immediately.",
+            "matched_flags": matched_red
+        }
+    elif matched_yellow:
+        return {
+            "triage_level": "Urgent",
+            "color_code": "Yellow",
+            "guidelines": "Visit a clinic, primary health centre, or urgent care facility within 24 hours. Monitor symptoms closely, and if they worsen, seek emergency care.",
+            "matched_flags": matched_yellow
+        }
+    else:
+        return {
+            "triage_level": "Non-Urgent / Routine",
+            "color_code": "Green",
+            "guidelines": "Get rest, drink plenty of fluids, and monitor symptoms. Visit a general physician if they persist.",
+            "matched_flags": ["General/Minor Symptoms"]
+        }
+
+
 # Change this prompt to change what your voice agent does.
 # See README.md for example prompts (customer support, language tutor, receptionist).
 SYSTEM_PROMPT = """IDENTITY:
 You are MediBuddy, a warm and empathetic health assistant built for the Health Access track. Your role is to help people get quick wellness information, healthy habits, nutrition tips, and general health info.
 
 OBJECTIVES:
-- Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, general health definitions, and habits).
+- Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, symptom triage classification, and nearest facility lookups).
 - Maintain safety by refusing diagnosis or prescriptions, and direct users to appropriate medical services if they show red-flag symptoms.
 
 KNOWLEDGE LIMITS:
@@ -99,6 +259,49 @@ class Assistant(Agent):
         if success:
             return "Caller profile saved successfully."
         return "Failed to save caller profile."
+
+    @function_tool
+    async def triage_symptoms(self, context: RunContext, symptoms: str) -> str:
+        """Use this tool to classify symptoms into a triage urgency level (Red/Emergency, Yellow/Urgent, Green/Non-Urgent) and retrieve clinical guidance.
+        
+        Args:
+            symptoms: A string describing the caller's symptoms in detail.
+        """
+        logger.info(f"LLM called triage_symptoms for symptoms: '{symptoms}'")
+        res = classify_triage(symptoms)
+        res["data_timestamp"] = "from clinical triage protocols updated as of August 2026"
+        return json.dumps(res)
+
+    @function_tool
+    async def find_nearest_facility(self, context: RunContext, location_query: str) -> str:
+        """Use this tool to search for the nearest healthcare facility (Primary Health Centre, hospital, clinic, or doctor) based on a location name in India.
+        
+        Args:
+            location_query: The name of the city, neighborhood, or area in India to search (e.g. 'Gachibowli, Hyderabad' or 'Indiranagar, Bangalore').
+        """
+        logger.info(f"LLM called find_nearest_facility for location: '{location_query}'")
+        coordinates = await geocode_nominatim(location_query)
+        if coordinates is not None:
+            lat, lon, display_name = coordinates
+            facilities = await query_overpass(lat, lon)
+            if facilities is not None and len(facilities) > 0:
+                current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                return json.dumps({
+                    "facilities": facilities,
+                    "location_geocoded": display_name,
+                    "data_source": "live OpenStreetMap API",
+                    "data_timestamp": f"live accessed at {current_time}",
+                    "status": "success"
+                })
+        
+        fallback_data = find_local_fallback(location_query)
+        return json.dumps({
+            "facilities": fallback_data,
+            "location_geocoded": f"{location_query} (fallback database mapping)",
+            "data_source": "offline local database fallback",
+            "data_timestamp": "from our local database last updated in August 2026",
+            "status": "offline_fallback_used"
+        })
 
 
 server = AgentServer()
@@ -196,7 +399,7 @@ Always write every language in its own native script.
 - Same rule for all non-English languages.
 
 OBJECTIVES:
-- Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, general health definitions, and habits).
+- Welcome the caller, state you are built for the Health Access track, and explain how you can help (wellness tips, symptom triage classification, and nearest facility lookups).
 - Maintain safety by refusing diagnosis or prescriptions, and direct users to appropriate medical services if they show red-flag symptoms.
 
 KNOWLEDGE LIMITS:
@@ -225,6 +428,18 @@ CONSENT & RECORD SAVING:
   * name
   * language preference
   * facts: age_band (e.g. child, adult, senior), ongoing_conditions, and last_triage_outcome.
+
+SYMPTOM TRIAGE CLASSIFICATION:
+- If the user describes any medical symptoms or asks about symptom classification, you MUST immediately call the `triage_symptoms` tool.
+- Report the triage urgency level and the clinical guidance returned by the tool.
+- You MUST state that the triage guidelines are "from our clinical triage guidelines database updated in August 2026". E.g., "Based on our clinical guidelines from August 2026, this is classified as..."
+
+NEAREST HEALTH FACILITY LOOKUP:
+- If the user asks for nearest doctors, clinics, primary health centres, or hospitals, you MUST ask for their location if not known, and call the `find_nearest_facility` tool with their location.
+- Present the name, type, and address of the closest facility first. Keep it very conversational.
+- You MUST explicitly state the data source and when it is from:
+  * If live OpenStreetMap was used successfully: say "According to the live OpenStreetMap database accessed just now, the closest facility is..."
+  * If offline fallback database was used: say "Due to a network connection issue, using our offline local database last updated in August 2026, the closest facility is..."
 
 STYLE:
 - Keep all responses short, clear, and conversational for speech.

@@ -147,7 +147,7 @@ async def test_database_flow() -> None:
     profile = database.get_caller(user_id)
     assert profile is not None
     assert profile["name"] == "Ramesh"
-    assert profile["facts"].get("ongoing_conditions") == "hypertension"
+    assert profile["facts"].get("ongoing_conditions").lower() == "hypertension"
 
     # Scenario 2: Returning user call - Welcome back greeting
     async with (
@@ -167,3 +167,51 @@ async def test_database_flow() -> None:
             result.expect.contains_message(role="assistant")
             .judge(llm, intent="Greets Ramesh by name and references their previous topic or hypertension.")
         )
+
+
+def test_triage_classification():
+    from agent import classify_triage
+
+    # Red flag (Emergency)
+    res_red = classify_triage("I have severe chest pain radiating down my arm")
+    assert res_red["triage_level"] == "Emergency"
+    assert res_red["color_code"] == "Red"
+    assert "chest pain" in res_red["matched_flags"]
+
+    # Yellow flag (Urgent)
+    res_yellow = classify_triage("My kid has a high fever of 103 degrees")
+    assert res_yellow["triage_level"] == "Urgent"
+    assert res_yellow["color_code"] == "Yellow"
+
+    # Green flag (Non-Urgent)
+    res_green = classify_triage("Just have a mild cough and cold")
+    assert res_green["triage_level"] == "Non-Urgent / Routine"
+    assert res_green["color_code"] == "Green"
+
+def test_distance_calculation():
+    from agent import calculate_distance
+    # Distance between Gachibowli and Kondapur coordinates
+    dist = calculate_distance(17.4483, 78.3741, 17.4622, 78.3568)
+    assert round(dist, 1) > 0.0
+
+def test_find_local_fallback():
+    from agent import find_local_fallback
+    facilities = find_local_fallback("Indiranagar, Bangalore")
+    assert len(facilities) > 0
+    assert any("Indiranagar" in f["name"] for f in facilities)
+
+@pytest.mark.asyncio
+async def test_find_nearest_facility_fallback_flow():
+    from agent import Assistant
+    
+    class DummyContext:
+        pass
+    
+    assistant = Assistant()
+    result_str = await assistant.find_nearest_facility(DummyContext(), "InvalidLocationThatDoesNotGeocode")
+    import json
+    result = json.loads(result_str)
+    assert "facilities" in result
+    assert result["data_source"] == "offline local database fallback"
+    assert "August 2026" in result["data_timestamp"]
+

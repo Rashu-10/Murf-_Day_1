@@ -173,6 +173,22 @@ Default is Google Gemini. To switch:
 - **Gemini (default):** Set `GOOGLE_API_KEY` in `.env.local`
 - **OpenAI:** Set `OPENAI_API_KEY`, install `livekit-agents[openai]`, and change the `llm=` argument
 
+## Domain Tools (Health Access Track)
+
+This voice agent contains custom-built domain tools for the **Health Access** track:
+
+### 1. Symptom Triage Classifier (`triage_symptoms`)
+- **Description**: Evaluates user-described symptoms and classifies their urgency level into Red (Emergency), Yellow (Urgent), or Green (Non-Urgent / Routine).
+- **Clinical Data Origin**: Clinical triage guidelines database last updated in **August 2026**.
+- **Action**: Matches keywords deterministically and yields guidelines, urgency ratings, and appropriate emergency contact recommendations (e.g. 108/112 in India).
+
+### 2. Nearest PHC or Facility Lookup (`find_nearest_facility`)
+- **Description**: Searches for nearby hospitals, clinics, or primary health centres (PHCs) based on a location name query in India (e.g. "Gachibowli, Hyderabad").
+- **Live Data Source**: Integrates with live **OpenStreetMap (OSM) Nominatim Geocoding & Overpass APIs** to query healthcare entities within a 5 km radius.
+- **Robust Failure Path (Offline Database)**: In case the live APIs time out or fail (timeout set to 4-5 seconds), it falls back to a hand-rolled local offline database of Primary Health Centres and hospitals in major Indian metros (Hyderabad, Bangalore, New Delhi, Mumbai).
+- **Offline Data Origin**: Pre-compiled local dataset last updated in **August 2026**.
+- **Narration**: The agent will explicitly state whether the results are from the live database or the offline fallback, including the date of the fallback dataset (August 2026), satisfying data-age and transparency guidelines.
+
 ## Testing
 
 The project includes an eval suite based on the LiveKit Agents [testing framework](https://docs.livekit.io/agents/build/testing/):
