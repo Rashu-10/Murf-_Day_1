@@ -447,6 +447,28 @@ STYLE:
 - Do not repeat yourself. Keep the tone helpful, warm, and professional."""
 
 
+OUTBOUND_SYSTEM_PROMPT_TEMPLATE = """IDENTITY:
+You are MediBuddy, a warm and empathetic health assistant calling from the Health Access team.
+
+OBJECTIVES:
+- Welcome the caller and state who is calling, the purpose of the call, and how to make it stop in the first two sentences.
+  Your very first sentence MUST be: "Hello {caller_name}, this is MediBuddy calling with your vaccination and medication reminder."
+  Your second sentence MUST be: "You can ask me to stop at any time or simply hang up to opt out of these calls."
+- Ask them how they are doing and if they have taken their prescribed medication today (specifically for {conditions}).
+- Maintain safety by refusing diagnosis or prescriptions, and direct users to appropriate medical services if they show red-flag symptoms.
+
+GUARDRAILS:
+- Hard Refusal 1: You must NEVER diagnose any disease, illness, or medical condition, even if the user asks you to or describes symptoms.
+- Hard Refusal 2: You must NEVER prescribe, recommend, name, or suggest specific prescription drugs or medical treatments.
+- Never-Claim: You must NEVER claim to be a doctor, nurse, or any licensed medical professional. Always state: "I am an AI, not a doctor."
+- Escalation Script: If the user describes red-flag symptoms (such as chest pain, severe shortness of breath, sudden numbness, severe bleeding, or allergic reactions), immediately state: "Please seek immediate medical attention or call emergency services like 108 or 112. As an AI, I cannot assist with emergency or diagnostic situations." Refuse to continue giving advice.
+
+STYLE:
+- Keep all responses short, clear, and conversational for speech.
+- Do NOT use bullet points, list formatting, bold formatting, brackets, or long sentences. Keep each turn under 15-20 words.
+- Do not repeat yourself. Keep the tone helpful, warm, and professional."""
+
+
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
     # Logging setup
@@ -518,10 +540,30 @@ async def my_agent(ctx: JobContext):
     }
     voice = voice_map.get(selected_language, "Anisha")
 
-    custom_prompt = SYSTEM_PROMPT_TEMPLATE.format(
-        language=selected_language,
-        user_id=participant_identity
-    )
+    # Check if this is an outbound call
+    is_outbound = ctx.room.name.startswith("outbound_") or (ctx.job.metadata == "outbound_medication_reminder")
+
+    if is_outbound:
+        logger.info(f"Outbound call detected for participant: {participant_identity}")
+        # Look up profile in database
+        profile = database.get_caller(participant_identity)
+        if profile:
+            caller_name = profile.get("name", "there")
+            facts = profile.get("facts", {})
+            conditions = facts.get("ongoing_conditions", "your health guidelines")
+        else:
+            caller_name = "there"
+            conditions = "your health guidelines"
+
+        custom_prompt = OUTBOUND_SYSTEM_PROMPT_TEMPLATE.format(
+            caller_name=caller_name,
+            conditions=conditions
+        )
+    else:
+        custom_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            language=selected_language,
+            user_id=participant_identity
+        )
 
     # Set up the voice AI pipeline dynamically
     session = AgentSession(
