@@ -4,6 +4,7 @@ import math
 from datetime import datetime, timezone
 import aiohttp
 import asyncio
+import os
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -303,6 +304,99 @@ class Assistant(Agent):
             "status": "offline_fallback_used"
         })
 
+    @function_tool
+    async def create_escalation(
+        self,
+        context: RunContext,
+        caller_name: str,
+        symptoms: str,
+        urgency: str,
+        language: str,
+        preferred_followup: str,
+        what_agent_checked: str
+    ) -> str:
+        """Create a human help request (escalation) when the user describes emergency symptoms or requests human/doctor assistance.
+        Before calling this tool, you MUST explicitly ask the caller for permission to share their name, symptoms, and urgency level with our medical team. Do NOT call this tool if they reject permission.
+        
+        Args:
+            caller_name: The name of the caller.
+            symptoms: A brief summary of the caller's symptoms or request details.
+            urgency: Urgency level ('Low', 'Medium', 'High', or 'Emergency').
+            language: The caller's language preference.
+            preferred_followup: Caller's preferred follow-up contact method (e.g. 'Phone' or 'Email').
+            what_agent_checked: Summary of what the agent already checked (e.g. 'Triage outcome: Red/Emergency, Location query: Saket').
+        """
+        logger.info(f"LLM called create_escalation for caller_name={caller_name}, urgency={urgency}")
+        from livekit.agents import utils
+        esc_id = f"esc-{utils.shortuuid()[:6].lower()}"
+        
+        caller_id = "unknown_caller"
+        for p in context.room.remote_participants.values():
+            caller_id = p.identity
+            break
+            
+        success = database.create_escalation_in_db(
+            esc_id=esc_id,
+            caller_id=caller_id,
+            caller_name=caller_name,
+            symptoms=symptoms,
+            urgency=urgency,
+            language=language,
+            preferred_followup=preferred_followup,
+            what_agent_checked=what_agent_checked
+        )
+        
+        if success:
+            webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+            if webhook_url:
+                try:
+                    color_map = {
+                        "emergency": 15158332,
+                        "high": 15105536,
+                        "medium": 15105536,
+                        "low": 3066993
+                    }
+                    color = color_map.get(urgency.lower(), 3447003)
+                    
+                    payload = {
+                        "embeds": [
+                            {
+                                "title": f"🚨 Human Escalation Requested ({esc_id})",
+                                "color": color,
+                                "fields": [
+                                    {"name": "Who needs help", "value": f"**Name:** {caller_name}\n**ID:** {caller_id}", "inline": True},
+                                    {"name": "Urgency Level", "value": f"**{urgency}**", "inline": True},
+                                    {"name": "Language Preference", "value": language, "inline": True},
+                                    {"name": "Preferred Follow-up", "value": preferred_followup, "inline": True},
+                                    {"name": "What happened (Symptoms/Request)", "value": symptoms},
+                                    {"name": "What agent checked", "value": what_agent_checked}
+                                ],
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }
+                        ]
+                    }
+                    
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(webhook_url, json=payload, timeout=5.0) as resp:
+                            if resp.status in (200, 204):
+                                logger.info("Discord webhook sent successfully.")
+                            else:
+                                logger.warning(f"Discord webhook failed with status {resp.status}")
+                except Exception as e:
+                    logger.error(f"Error sending Discord Webhook: {e}")
+            
+            return json.dumps({
+                "status": "success",
+                "reference_id": esc_id,
+                "urgency": urgency,
+                "message": "Escalation request created successfully."
+            })
+        
+        return json.dumps({
+            "status": "error",
+            "message": "Failed to create escalation request in database."
+        })
+
 
 server = AgentServer()
 
@@ -410,8 +504,22 @@ GUARDRAILS:
 - Hard Refusal 1: You must NEVER diagnose any disease, illness, or medical condition, even if the user asks you to or describes symptoms.
 - Hard Refusal 2: You must NEVER prescribe, recommend, name, or suggest specific prescription drugs or medical treatments.
 - Never-Claim: You must NEVER claim to be a doctor, nurse, or any licensed medical professional. Always state: "I am an AI, not a doctor."
-- Escalation Script: If the user describes red-flag symptoms (such as chest pain, severe shortness of breath, sudden numbness, severe bleeding, or allergic reactions), immediately state (in {language}): "Please seek immediate medical attention or call emergency services like 108 or 112. As an AI, I cannot assist with emergency or diagnostic situations." Refuse to continue giving advice.
+- Escalation Script: If the user describes red-flag symptoms (such as chest pain, severe shortness of breath, sudden numbness, severe bleeding, or allergic reactions), immediately state (in {language}): "If this is a life-threatening emergency, please visit the nearest hospital or call 108 or 112 immediately." Then follow the HUMAN ESCALATION PROTOCOL to ask for permission and escalate.
 - Unrelated/Harmful Request Refusal: If the user asks for help with inappropriate, harmful, or unrelated activities (like hacking, programming advice, or non-health topics), you must explicitly and politely refuse to assist with that request, stating that you cannot help with it, and remind them that you can only help with wellness and health-related topics.
+
+HUMAN ESCALATION PROTOCOL:
+- You MUST escalate to a human support agent or doctor in these two scenarios:
+  1. The caller describes red-flag/emergency symptoms (e.g., chest pain, difficulty breathing, severe bleeding, numbness, allergic reactions).
+  2. The caller explicitly requests to talk to a human, doctor, or medical team.
+- PROTOCOL STEPS:
+  1. **Ask for Permission:** You MUST ask: "I would like to escalate this to our medical support team. May I share your details with them?"
+  2. **If Permission Granted (Yes):**
+     - Ask: "Should we contact you by phone or email?"
+     - Determine urgency level: "Emergency" (for red-flag symptoms), "High", "Medium", or "Low" (for simple human agent request).
+     - Invoke the `create_escalation` tool.
+     - Once you receive the reference ID, say: "Thank you. Your reference ID is {{reference_id}}. Our team will contact you. For immediate emergencies, call 108 or 112."
+  3. **If Permission Denied (No):**
+     - Do NOT call `create_escalation`. Say: "Understood. I will not share any details. What else can I help you with?"
 
 CALLER ID & RECORD RETRIEVAL:
 - The current caller's ID is: {user_id}

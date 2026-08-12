@@ -554,6 +554,42 @@ export function MediBuddyDashboard({
   const [micMuted, setMicMuted] = useState(false);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
+  const [activeTab, setActiveTab] = useState<'transcript' | 'escalations'>('transcript');
+  const [escalations, setEscalations] = useState<any[]>([]);
+
+  const fetchEscalations = async () => {
+    try {
+      const res = await fetch('/api/escalations');
+      if (res.ok) {
+        const data = await res.json();
+        setEscalations(data);
+      }
+    } catch (err) {
+      console.error('Error fetching escalations:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchEscalations();
+    const interval = setInterval(fetchEscalations, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleUpdateStatus = async (id: string, newStatus: string) => {
+    try {
+      const res = await fetch('/api/escalations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, status: newStatus }),
+      });
+      if (res.ok) {
+        fetchEscalations();
+      }
+    } catch (err) {
+      console.error('Error updating status:', err);
+    }
+  };
+
   const isConnected = session.isConnected;
   const connectionState = session.connectionState;
 
@@ -887,45 +923,166 @@ export function MediBuddyDashboard({
         <section className="lg:col-span-1 flex flex-col gap-6 w-full lg:sticky lg:top-6 lg:self-start">
           
           {/* Transcript Card */}
-          <div className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm flex flex-col h-[350px]">
-            <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-3 shrink-0">
-              <Activity className="size-4 text-teal-600" />
-              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-500">{t('liveTranscript')}</h3>
+          <div className="bg-white border border-slate-100 rounded-3xl p-5 shadow-sm flex flex-col h-[500px]">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3 shrink-0">
+              <div className="flex gap-2">
+                <button
+                  id="tab-btn-transcript"
+                  onClick={() => setActiveTab('transcript')}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer",
+                    activeTab === 'transcript' 
+                      ? "bg-teal-600 text-white shadow-sm" 
+                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                  )}
+                >
+                  <Activity className="size-3.5" />
+                  <span>Transcript</span>
+                </button>
+                <button
+                  id="tab-btn-escalations"
+                  onClick={() => setActiveTab('escalations')}
+                  className={cn(
+                    "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer relative",
+                    activeTab === 'escalations' 
+                      ? "bg-teal-600 text-white shadow-sm" 
+                      : "bg-slate-50 text-slate-500 hover:bg-slate-100"
+                  )}
+                >
+                  <LifeBuoy className="size-3.5" />
+                  <span>Escalations</span>
+                  {escalations.filter(e => e.status === 'open').length > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[8px] font-bold size-4 flex items-center justify-center rounded-full animate-pulse border border-white">
+                      {escalations.filter(e => e.status === 'open').length}
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
             
-            {/* Chat Messages */}
-            <div 
-              id="transcript-container"
-              className="flex-1 overflow-y-auto space-y-3.5 pr-1.5 scrollbar-thin"
-            >
-              {messages.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-4">
-                  <Volume2 className="size-8 text-slate-300 mb-2" />
-                  <p className="text-xs">{t('noTranscript')}</p>
-                </div>
-              ) : (
-                messages.map((msg) => {
-                  const isUser = msg.from?.isLocal === true;
-                  return (
-                    <div 
-                      key={msg.id} 
-                      className={cn(
-                        "flex flex-col max-w-[85%] text-xs rounded-2xl px-3 py-2.5 shadow-sm",
-                        isUser 
-                          ? "ml-auto bg-slate-100 text-slate-800 rounded-tr-none" 
-                          : "bg-teal-50/50 border border-teal-500/10 text-teal-900 rounded-tl-none"
-                      )}
-                    >
-                      <span className="font-bold text-[9px] uppercase tracking-wider opacity-60 mb-0.5">
-                        {isUser ? "You" : "MediBuddy"}
-                      </span>
-                      <p className="leading-relaxed">{msg.message}</p>
-                    </div>
-                  );
-                })
-              )}
-              <div ref={transcriptEndRef} />
-            </div>
+            {activeTab === 'transcript' ? (
+              /* Chat Messages */
+              <div 
+                id="transcript-container"
+                className="flex-1 overflow-y-auto space-y-3.5 pr-1.5 scrollbar-thin"
+              >
+                {messages.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-4">
+                    <Volume2 className="size-8 text-slate-300 mb-2" />
+                    <p className="text-xs">{t('noTranscript')}</p>
+                  </div>
+                ) : (
+                  messages.map((msg) => {
+                    const isUser = msg.from?.isLocal === true;
+                    return (
+                      <div 
+                        key={msg.id} 
+                        className={cn(
+                          "flex flex-col max-w-[85%] text-xs rounded-2xl px-3 py-2.5 shadow-sm",
+                          isUser 
+                            ? "ml-auto bg-slate-100 text-slate-800 rounded-tr-none" 
+                            : "bg-teal-50/50 border border-teal-500/10 text-teal-900 rounded-tl-none"
+                        )}
+                      >
+                        <span className="font-bold text-[9px] uppercase tracking-wider opacity-60 mb-0.5">
+                          {isUser ? "You" : "MediBuddy"}
+                        </span>
+                        <p className="leading-relaxed">{msg.message}</p>
+                      </div>
+                    );
+                  })
+                )}
+                <div ref={transcriptEndRef} />
+              </div>
+            ) : (
+              /* Escalations Panel */
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1.5 scrollbar-thin">
+                {escalations.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-4">
+                    <LifeBuoy className="size-8 text-slate-300 mb-2" />
+                    <p className="text-xs">No active escalations. They will appear here if the agent requests human help.</p>
+                  </div>
+                ) : (
+                  escalations.map((esc) => {
+                    const getUrgencyBadge = (urgency: string) => {
+                      const u = urgency.toLowerCase();
+                      if (u === 'emergency') return 'bg-rose-500 text-white border-rose-600';
+                      if (u === 'high') return 'bg-amber-500 text-white border-amber-600';
+                      if (u === 'medium') return 'bg-yellow-500 text-yellow-950 border-yellow-600';
+                      return 'bg-emerald-500 text-white border-emerald-600';
+                    };
+                    return (
+                      <div 
+                        key={esc.id} 
+                        className={cn(
+                          "flex flex-col gap-2 border rounded-2xl p-3.5 shadow-xs transition-all text-xs bg-slate-50/60 border-slate-100",
+                          esc.status === 'open' && "border-l-4 border-l-rose-500 bg-rose-50/5 border-slate-200/60",
+                          esc.status === 'in_progress' && "border-l-4 border-l-amber-500 bg-amber-50/5 border-slate-200/60",
+                          esc.status === 'resolved' && "opacity-75 grayscale border-l-4 border-l-slate-400 bg-slate-100/40"
+                        )}
+                      >
+                        <div className="flex justify-between items-start gap-1">
+                          <span className="font-extrabold text-slate-700 uppercase tracking-wide text-[9px]">
+                            {esc.id}
+                          </span>
+                          <span className={cn("px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase border tracking-wider", getUrgencyBadge(esc.urgency))}>
+                            {esc.urgency}
+                          </span>
+                        </div>
+
+                        <div className="space-y-1 mt-1 text-slate-700">
+                          <div>
+                            <strong>Caller:</strong> <span className="font-semibold text-slate-800">{esc.caller_name || 'Anonymous'}</span>
+                          </div>
+                          <div>
+                            <strong>Symptoms:</strong> <span className="text-slate-600">{esc.symptoms}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            <strong>Checked:</strong> {esc.what_agent_checked}
+                          </div>
+                          <div className="flex gap-3 text-[10px] text-slate-500 mt-1 pt-1.5 border-t border-slate-200/60">
+                            <span>📞 {esc.preferred_followup}</span>
+                            <span>🌐 {esc.language}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-slate-200/40 justify-end shrink-0">
+                          {esc.status === 'open' && (
+                            <>
+                              <button 
+                                className="h-6 text-[10px] px-2 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 font-semibold cursor-pointer"
+                                onClick={() => handleUpdateStatus(esc.id, 'in_progress')}
+                              >
+                                In Progress
+                              </button>
+                              <button 
+                                className="h-6 text-[10px] px-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-semibold cursor-pointer"
+                                onClick={() => handleUpdateStatus(esc.id, 'resolved')}
+                              >
+                                Resolve
+                              </button>
+                            </>
+                          )}
+                          {esc.status === 'in_progress' && (
+                            <button 
+                              className="h-6 text-[10px] px-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-semibold cursor-pointer"
+                              onClick={() => handleUpdateStatus(esc.id, 'resolved')}
+                            >
+                              Resolve
+                            </button>
+                          )}
+                          {esc.status === 'resolved' && (
+                            <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider">
+                              ✓ Resolved
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
           </div>
 
           {/* Quick Actions Card */}
