@@ -24,9 +24,14 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 import database
 
+from pathlib import Path
+
 logger = logging.getLogger("agent")
 
-load_dotenv(".env.local")
+backend_dir = Path(__file__).parent.parent
+load_dotenv(backend_dir / ".env.local", override=True)
+load_dotenv(backend_dir / ".env", override=True)
+
 
 # Helper functions for OSM geocoding and querying
 headers = {"User-Agent": "MediBuddyHealthAccessAgent/1.0 (contact: support@medibuddy.ai)"}
@@ -660,9 +665,8 @@ async def my_agent(ctx: JobContext):
             facts = profile.get("facts", {})
             conditions = facts.get("ongoing_conditions", "your health guidelines")
         else:
-            caller_name = "there"
             conditions = "your health guidelines"
-
+        
         custom_prompt = OUTBOUND_SYSTEM_PROMPT_TEMPLATE.format(
             caller_name=caller_name,
             conditions=conditions
@@ -728,9 +732,29 @@ async def my_agent(ctx: JobContext):
         room=ctx.room,
     )
 
-    # Let the LLM generate the initial greeting instead of playing a static greeting
     await session.generate_reply()
+
+    start_time = datetime.now(timezone.utc)
+
+    @session.on("close")
+    def on_session_close():
+        duration = int((datetime.now(timezone.utc) - start_time).total_seconds())
+        status = "successful" if duration >= 5 else "failed"
+        call_id = f"CALL-{utils.shortuuid()[:6].upper()}"
+        database.record_call(
+            call_id=call_id,
+            caller_id=participant_identity,
+            caller_name=participant_identity if participant_identity != "default_user" else "Browser Caller",
+            status=status,
+            duration_seconds=duration,
+            notes="Health consultation completed" if status == "successful" else "Call ended prematurely",
+            channel="sip" if is_outbound else "browser",
+            language=selected_language,
+            triage_level="Routine"
+        )
+        logger.info(f"Recorded end-of-call record: {call_id} (duration={duration}s, status={status})")
 
 
 if __name__ == "__main__":
     cli.run_app(server)
+

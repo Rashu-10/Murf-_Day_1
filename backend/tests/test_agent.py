@@ -215,3 +215,34 @@ async def test_find_nearest_facility_fallback_flow():
     assert result["data_source"] == "offline local database fallback"
     assert "August 2026" in result["data_timestamp"]
 
+
+def test_calls_database_operations():
+    import uuid
+    import database
+
+    database.init_db()
+
+    test_id = f"TEST-{uuid.uuid4().hex[:6]}"
+    # Record a test call
+    success = database.record_call(
+        call_id=test_id,
+        caller_id="sip:test@sip.linphone.org",
+        caller_name="Test User",
+        status="successful",
+        duration_seconds=120,
+        notes="Automated test call",
+        channel="browser",
+        language="English",
+        triage_level="Routine",
+    )
+    assert success is True
+
+    stats = database.get_call_stats()
+    assert stats["total_calls"] > 0
+    assert stats["successful_calls"] > 0
+    assert "success_rate" in stats
+
+    calls = database.get_recent_calls(limit=20)
+    assert any(c["id"] == test_id for c in calls)
+
+
