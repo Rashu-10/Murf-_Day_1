@@ -402,6 +402,111 @@ class Assistant(Agent):
             "message": "Failed to create escalation request in database."
         })
 
+    @function_tool
+    async def transfer_to_clinic_specialist(self, context: RunContext, reason: str = "") -> str:
+        """Use this tool when the user requests to book, schedule, reschedule, or cancel a clinic or doctor appointment, check doctor availability, or inquire about clinic appointment slots.
+        
+        Args:
+            reason: The user's request details or reason for needing the appointment specialist.
+        """
+        logger.info(f"Main agent handing off to Clinic & Appointment Specialist. Reason: '{reason}'")
+        specialist = ClinicAppointmentSpecialist()
+        # Set male voice (en-US-matthew) for specialist assistance
+        if hasattr(context.session.tts, "_opts"):
+            context.session.tts._opts.voice = "en-US-matthew"
+        context.session.update_agent(specialist)
+        return "Connected to Clinic & Appointment Specialist. The specialist is now active in the conversation with a male specialist voice."
+
+
+SPECIALIST_SYSTEM_PROMPT = """IDENTITY:
+You are the Clinic & Appointment Specialist for MediBuddy Health Access (a male specialist assistant). Your job is exclusively focused on helping users check doctor slot availability, schedule or book clinic consultations, and provide pre-visit guidelines.
+
+OBJECTIVES:
+- When starting or taking over a conversation, introduce yourself warmly: "Hello! I am the Clinic and Appointment Specialist. How can I help schedule or book your visit today?"
+- Help the user check doctor schedules, available time slots, and book consultation appointments using your tools.
+- Provide clear visit guidelines (e.g., bring photo ID proof, past medical records, and arrive 10 minutes early).
+- If the user asks general wellness, symptom triage, or non-appointment questions, hand back to MediBuddy using `transfer_to_main_agent`.
+
+LIMITS & GUARDRAILS:
+- You handle appointment bookings, clinic schedules, doctor slot checks, and clinic visit guidelines.
+- Do NOT perform symptom triage or provide medical treatment advice.
+- Keep responses short, clear, and conversational for speech (15-20 words). No bullet points, markdown formatting, or numbered lists."""
+
+
+class ClinicAppointmentSpecialist(Agent):
+    def __init__(self, instructions: str = SPECIALIST_SYSTEM_PROMPT) -> None:
+        super().__init__(instructions=instructions)
+
+    @function_tool
+    async def get_available_slots(
+        self, context: RunContext, clinic_name: str = "Gachibowli Primary Health Centre", doctor_specialty: str = "General Physician"
+    ) -> str:
+        """Use this tool to check available doctor consultation time slots at a clinic.
+        
+        Args:
+            clinic_name: Name of the clinic or hospital.
+            doctor_specialty: Medical specialty requested (e.g. General Physician, Pediatrics).
+        """
+        logger.info(f"Specialist LLM called get_available_slots for clinic='{clinic_name}'")
+        slots = [
+            {"doctor": "Dr. Priya Sharma (General Physician)", "time": "10:00 AM Tomorrow", "status": "Available"},
+            {"doctor": "Dr. Rajesh Kumar (General Physician)", "time": "02:30 PM Tomorrow", "status": "Available"},
+            {"doctor": "Dr. Ananya Reddy (Pediatrics)", "time": "04:30 PM Tomorrow", "status": "Available"}
+        ]
+        return json.dumps({
+            "clinic": clinic_name,
+            "specialty": doctor_specialty,
+            "available_slots": slots,
+            "instructions": "Offer these available time slots to the caller."
+        })
+
+    @function_tool
+    async def book_appointment(
+        self,
+        context: RunContext,
+        patient_name: str,
+        clinic_name: str,
+        doctor_name: str,
+        slot_time: str,
+        reason_for_visit: str = "General Consultation"
+    ) -> str:
+        """Use this tool to confirm and book a doctor appointment for the patient.
+        
+        Args:
+            patient_name: Name of the patient.
+            clinic_name: Name of the clinic or health facility.
+            doctor_name: Name of the selected doctor.
+            slot_time: Chosen appointment time slot (e.g. '10:00 AM Tomorrow').
+            reason_for_visit: Brief reason for the appointment visit.
+        """
+        from livekit.agents import utils
+        apt_id = f"APT-{utils.shortuuid()[:6].upper()}"
+        logger.info(f"Specialist LLM booked appointment {apt_id} for patient={patient_name}")
+        return json.dumps({
+            "status": "confirmed",
+            "appointment_id": apt_id,
+            "patient_name": patient_name,
+            "doctor": doctor_name,
+            "clinic": clinic_name,
+            "slot_time": slot_time,
+            "visit_guidelines": "Please arrive 10 minutes early with a valid ID proof and past medical records."
+        })
+
+    @function_tool
+    async def transfer_to_main_agent(self, context: RunContext, reason: str = "") -> str:
+        """Use this tool to hand the conversation back to the main MediBuddy assistant if the caller asks general wellness, symptom triage, or non-appointment questions.
+        
+        Args:
+            reason: Reason for handing back to main agent.
+        """
+        logger.info(f"Specialist handing back to main agent. Reason: '{reason}'")
+        main_agent = Assistant()
+        # Restore main agent female voice (Anisha)
+        if hasattr(context.session.tts, "_opts"):
+            context.session.tts._opts.voice = "Anisha"
+        context.session.update_agent(main_agent)
+        return "Handed back to main MediBuddy health assistant."
+
 
 server = AgentServer()
 
@@ -554,6 +659,11 @@ NEAREST HEALTH FACILITY LOOKUP:
   * If live OpenStreetMap was used successfully: say "According to the live OpenStreetMap database accessed just now, the closest facility is..."
   * If offline fallback database was used: say "Due to a network connection issue, using our offline local database last updated in August 2026, the closest facility is..."
 
+SPECIALIST HANDOFF PROTOCOL:
+- If the user asks to book, schedule, reschedule, or cancel a clinic or doctor appointment, check doctor availability, or inquire about clinic appointment slots:
+  1. Say: "I will connect you to our clinic and appointment specialist."
+  2. Immediately call the `transfer_to_clinic_specialist` tool. Do NOT attempt to book appointments yourself.
+
 STYLE:
 - Keep all responses short, clear, and conversational for speech.
 - Do NOT use bullet points, list formatting, bold formatting, brackets, or long sentences. Keep each turn under 15-20 words.
@@ -677,9 +787,24 @@ async def my_agent(ctx: JobContext):
             user_id=participant_identity
         )
 
+    stt_lang_map = {
+        "English": "en",
+        "Hindi": "hi",
+        "Telugu": "te",
+        "Tamil": "ta",
+        "Bengali": "bn",
+        "Gujarati": "gu",
+        "Kannada": "kn",
+        "Malayalam": "ml",
+        "Marathi": "mr",
+        "Punjabi": "pa",
+        "Urdu": "ur"
+    }
+    stt_lang = stt_lang_map.get(selected_language, "en")
+
     # Set up the voice AI pipeline dynamically
     session = AgentSession(
-        stt=deepgram.STT(model="nova-3", language="multi"),
+        stt=deepgram.STT(model="nova-3", language=stt_lang),
         llm=google.LLM(model="gemini-3.5-flash-lite"),
         tts=murf.TTS(
             voice=voice,
