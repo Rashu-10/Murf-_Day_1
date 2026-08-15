@@ -1,8 +1,22 @@
-# Voice Agent Starter — Powered by Murf Falcon
+# MediBuddy AI (मेडिबड्डी) — Voice Health Assistant for India 🇮🇳
 
-Build a production voice AI agent in 5 minutes. Powered by the fastest TTS on the market - swap the system prompt to build anything from customer support to language tutors.
+> **Completed 10 Days of Voice Agents — #VoiceForBharat Edition by Murf AI**  
+> MediBuddy AI is a production-grade, real-time multilingual voice health assistant built to provide instant symptom triage, primary healthcare guidance, and emergency escalation across India.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Murf Falcon](https://img.shields.io/badge/TTS-Murf%20Falcon-6366F1)](https://murf.ai/api/docs/text-to-speech/streaming) [![LiveKit](https://img.shields.io/badge/Transport-LiveKit-002cf2)](https://docs.livekit.io) [![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+
+📖 **[Read the Day 10 Final Blog Post](./DAY_10_BLOG_POST.md)** — *Building MediBuddy AI: An Ultra-Fast Multilingual Voice Health Assistant for India*
+
+---
+
+## 🌟 Key Highlights & Features
+
+- **⚡ Ultra-Fast Voice Response (~0.84s Latency):** Powered by Murf Falcon streaming TTS (55ms model latency) for sub-second human-like turn-taking.
+- **🗣️ Multilingual & Code-Mixed Support:** Understands and responds in English, Hindi, Telugu, Tamil, Kannada, Bengali, and code-mixed Hinglish/Teluglish.
+- **🚨 Emergency Triage Guardrails:** Classifies symptoms (Emergency / Urgent / Routine) with safety guardrails & human specialist escalation protocols.
+- **🏥 Facility Lookup Tool:** Dynamic function calling to locate nearest Primary Health Centres (PHCs) and hospitals based on pincode/location.
+- **🧠 Returning Patient Context:** Secure consent management and memory tracking for past medical history and allergies.
+- **📊 Real-Time Analytics Dashboard:** Monitor call volume, success rates (73.3%), average latency (0.84s), and escalation logs.
 
 ---
 
